@@ -18,7 +18,7 @@ HEADERS = {
 }
 
 # Model parameters
-MAX_TOKENS = 1200
+MAX_TOKENS = 5000  # Increased from 1200 to prevent cutoff
 TEMPERATURE = 0.6
 TOP_P = 0.9
 REPETITION_PENALTY = 1.1
@@ -246,6 +246,7 @@ def main():
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Orpheus Text-to-Speech using LM Studio API")
     parser.add_argument("--text", type=str, help="Text to convert to speech")
+    parser.add_argument("--file", type=str, help="Path to text file to convert to speech")
     parser.add_argument("--voice", type=str, default=DEFAULT_VOICE, help=f"Voice to use (default: {DEFAULT_VOICE})")
     parser.add_argument("--output", type=str, help="Output WAV file path")
     parser.add_argument("--list-voices", action="store_true", help="List available voices")
@@ -253,6 +254,10 @@ def main():
     parser.add_argument("--top_p", type=float, default=TOP_P, help="Top-p sampling parameter")
     parser.add_argument("--repetition_penalty", type=float, default=REPETITION_PENALTY, 
                        help="Repetition penalty (>=1.1 required for stable generation)")
+    parser.add_argument("--single-line", action="store_true", default=True,
+                       help="Convert text to single line (removes line breaks) [DEFAULT]")
+    parser.add_argument("--multi-line", action="store_true", 
+                       help="Keep original line breaks (overrides single-line default)")
     
     args = parser.parse_args()
     
@@ -260,25 +265,84 @@ def main():
         list_available_voices()
         return
     
-    # Use text from command line or prompt user
+    # Check if both text and file are provided
+    if args.text and args.file:
+        print("Error: Please provide either --text or --file, not both.")
+        return
+    
+    # Use text from file, command line, or prompt user
     prompt = args.text
+    
+    # Read from file if provided
+    if args.file:
+        try:
+            with open(args.file, 'r', encoding='utf-8') as f:
+                content = f.read()
+                original_length = len(content)
+                
+                # Process the text based on single-line option (default) or multi-line override
+                if args.multi_line:
+                    # Multi-line mode (overrides single-line default)
+                    # For multi-line: replace single newlines with space, keep double newlines
+                    lines = content.split('\n')
+                    processed_lines = []
+                    
+                    for i, line in enumerate(lines):
+                        line = line.strip()
+                        if line:  # Non-empty line
+                            processed_lines.append(line)
+                            # Add a period and space if the line doesn't end with punctuation
+                            if processed_lines and not line[-1] in '.!?,':
+                                processed_lines[-1] += '.'
+                    
+                    # Join all lines with spaces (treating each line as a sentence)
+                    prompt = ' '.join(processed_lines)
+                    print(f"Read {original_length} characters from {args.file}")
+                    print(f"Processed for speech: {len(prompt)} characters")
+                else:
+                    # Single-line mode (default)
+                    # Convert to single line, preserving emotion tags
+                    # Replace newlines and multiple spaces with single space
+                    prompt = ' '.join(content.split())
+                    print(f"Read {original_length} characters from {args.file}")
+                    print(f"Converted to single line: {len(prompt)} characters")
+                
+                if not prompt.strip():
+                    print(f"Error: File {args.file} is empty or contains only whitespace.")
+                    return
+        except FileNotFoundError:
+            print(f"Error: File {args.file} not found.")
+            return
+        except Exception as e:
+            print(f"Error reading file {args.file}: {e}")
+            return
+    
     if not prompt:
-        if len(sys.argv) > 1 and sys.argv[1] not in ("--voice", "--output", "--temperature", "--top_p", "--repetition_penalty"):
+        if len(sys.argv) > 1 and sys.argv[1] not in ("--voice", "--output", "--temperature", "--top_p", "--repetition_penalty", "--file"):
             prompt = " ".join([arg for arg in sys.argv[1:] if not arg.startswith("--")])
         else:
             prompt = input("Enter text to synthesize: ")
             if not prompt:
                 prompt = "Hello, I am Orpheus, an AI assistant with emotional speech capabilities."
     
-    # Default output file if none provided
+    # Handle output file path
     output_file = args.output
     if not output_file:
         # Create outputs directory if it doesn't exist
         os.makedirs("outputs", exist_ok=True)
-        # Generate a filename based on the voice and a timestamp
+        # Generate a filename based on the voice, source, and timestamp
         timestamp = time.strftime("%Y%m%d_%H%M%S")
-        output_file = f"outputs/{args.voice}_{timestamp}.wav"
+        source = "file" if args.file else "text"
+        output_file = f"outputs/{args.voice}_{source}_{timestamp}.wav"
         print(f"No output file specified. Saving to {output_file}")
+    else:
+        # If user provides a filename without path, put it in outputs folder
+        if not os.path.dirname(output_file):
+            os.makedirs("outputs", exist_ok=True)
+            output_file = f"outputs/{output_file}"
+        # Ensure .wav extension
+        if not output_file.endswith('.wav'):
+            output_file += '.wav'
     
     # Generate speech
     start_time = time.time()
